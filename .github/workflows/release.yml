@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    name: Build Android APKs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build APKs (release, split per ABI)
+        run: flutter build apk --release --split-per-abi
+
+      - name: List generated APKs
+        run: ls -l build/app/outputs/flutter-apk || true
+
+      - name: Upload Android APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apks
+          path: |
+            build/app/outputs/flutter-apk/*-release.apk
+
+  build-windows:
+    name: Build Windows (zip)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Enable Windows desktop
+        shell: bash
+        run: flutter config --enable-windows-desktop
+
+      - name: Install dependencies
+        shell: bash
+        run: flutter pub get
+
+      - name: Build Windows (release)
+        shell: bash
+        run: flutter build windows --release
+
+      - name: Archive Windows build output
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $buildDir = "build/windows/x64/runner/Release"
+          if (-not (Test-Path $buildDir)) { $buildDir = "build/windows/runner/Release" }
+          if (-not (Test-Path $buildDir)) { throw "Release folder not found: $buildDir" }
+          $zipPath = "$pwd\\windows-release.zip"
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          Compress-Archive -Path "$buildDir/*" -DestinationPath $zipPath
+
+      - name: Upload Windows artifact (zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: windows-release.zip
+
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-android, build-windows]
+    steps:
+      - name: Download Android APKs
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apks
+          path: dist
+
+      - name: Download Windows zip
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-release
+          path: dist
+
+      - name: Display artifacts
+        run: ls -R dist
+
+      - name: Create GitHub Release and upload assets
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: false
+          prerelease: false
+          files: |
+            dist/*
